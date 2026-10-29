@@ -1,0 +1,14 @@
+# Render Blueprint: New > Blueprint, point it at this repo.
+services:
+  - type: web
+    name: dlna-cloud
+    runtime: docker
+    rootDir: cloud
+    dockerfilePath: ./Dockerfile
+    plan: starter # the free plan spins down when idle; see README
+    healthCheckPath: /healthz
+    envVars:
+      - key: PAIRING_TOKEN
+        sync: false # set it in the dashboard; never commit it
+      - key: FORCE_HTTPS
+        value: "1"

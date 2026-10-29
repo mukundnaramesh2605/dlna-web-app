@@ -42,9 +42,11 @@ function collectLocations(lanIp, timeoutMs) {
       sock.close();
       resolve(locations);
     });
-    // Binding to the LAN IP makes macOS send the multicast out of Wi-Fi rather
-    // than whichever interface (VPN, Docker bridge...) happens to be the default.
-    sock.bind(0, lanIp, () => {
+    // Choosing the LAN interface makes macOS send the multicast out of Wi-Fi
+    // rather than whichever interface (VPN, Docker bridge...) is the default.
+    // Note: binding to lanIp *and* setting it as the multicast interface makes
+    // macOS fail the send with EHOSTUNREACH, so bind to all addresses.
+    sock.bind(0, '0.0.0.0', () => {
       try {
         sock.setMulticastInterface(lanIp);
       } catch {}

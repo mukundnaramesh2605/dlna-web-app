@@ -18,6 +18,8 @@ const MIME_ALIASES = {
   'video/x-msvideo': ['video/x-msvideo', 'video/avi', 'video/x-avi', 'video/divx'],
   'video/quicktime': ['video/quicktime', 'video/mp4'],
   'video/mp2t': ['video/mp2t', 'video/vnd.dlna.mpeg-tts', 'video/mpeg'],
+  'video/x-ms-wmv': ['video/x-ms-wmv', 'video/x-ms-asf'],
+  'audio/aac': ['audio/aac', 'audio/vnd.dlna.adts', 'audio/x-aac'],
   'audio/flac': ['audio/flac', 'audio/x-flac'],
   'audio/wav': ['audio/wav', 'audio/x-wav', 'audio/l16'],
 };

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Monitor Cast</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='4' width='20' height='13' rx='2' fill='%234f7cff'/%3E%3Cpath d='M10 8l5 3-5 3z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Monitor Cast</h1>
+    <div class="pills">
+      <span class="pill" id="pill-relay"><i></i><span>Relay</span></span>
+      <span class="pill" id="pill-agent"><i></i><span>Agent</span></span>
+    </div>
+    <button class="ghost small" id="logout" title="Forget the pairing token on this browser">Sign out</button>
+  </header>
+
+  <div class="banner offline" id="offline" hidden>
+    <strong>Agent offline.</strong>
+    <span>Your Mac is asleep, offline, or the agent isn't running. Controls come back automatically when it reconnects.</span>
+  </div>
+  <div class="banner error" id="error" hidden>
+    <strong id="error-title">Problem</strong> <span id="error-text"></span>
+  </div>
+
+  <main class="grid">
+    <section class="card files">
+      <div class="card-head">
+        <h2>Files</h2>
+        <button class="ghost small" id="change-folder">Change folder</button>
+      </div>
+      <div class="folder" id="folder" title="Media folder on the Mac">—</div>
+      <input type="search" id="filter" placeholder="Filter files…" autocomplete="off">
+      <ul class="file-list" id="file-list"></ul>
+      <p class="empty" id="files-empty" hidden></p>
+    </section>
+
+    <div class="side">
+      <section class="card">
+        <div class="card-head">
+          <h2>Devices</h2>
+          <button class="ghost small" id="rescan">Rescan</button>
+        </div>
+        <ul class="device-list" id="device-list"></ul>
+        <p class="empty" id="devices-empty" hidden>No DLNA renderers found. Check the monitor is on, or use <b>Open in monitor's browser</b> below.</p>
+      </section>
+
+      <section class="card">
+        <h2>Cast</h2>
+        <div class="selected" id="selected">Pick a file from the list.</div>
+        <div class="row">
+          <button class="primary" id="cast" disabled>Cast to monitor</button>
+          <label class="check" id="transcode-wrap" title="Convert with ffmpeg on the Mac for formats the monitor can't play (MKV/HEVC etc.)">
+            <input type="checkbox" id="transcode"> Transcode <span class="tag">stretch</span>
+          </label>
+        </div>
+        <button class="secondary" id="browser" disabled>Open in monitor's browser</button>
+        <div class="fallback" id="fallback" hidden>
+          <img id="qr" alt="QR code for the player URL">
+          <div>
+            <p>Open this on the monitor's built-in browser (same Wi-Fi), or scan the QR code:</p>
+            <a id="fallback-url" target="_blank" rel="noopener"></a>
+            <button class="ghost small" id="copy-url">Copy URL</button>
+            <p class="hint">This is a LAN address. It only works on your home network.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card now">
+        <h2>Now playing</h2>
+        <div class="now-title" id="now-title">Nothing playing</div>
+        <div class="now-sub" id="now-sub"></div>
+        <div class="warning" id="now-warning" hidden></div>
+        <div class="seek">
+          <span id="pos">0:00</span>
+          <input type="range" id="seek" min="0" max="0" step="1" value="0" disabled aria-label="Seek">
+          <span id="dur">0:00</span>
+        </div>
+        <div class="row controls">
+          <button id="playpause" disabled aria-label="Play">▶</button>
+          <button id="stop" disabled aria-label="Stop">■</button>
+          <label class="volume">🔊
+            <input type="range" id="volume" min="0" max="100" step="1" value="0" disabled aria-label="Volume">
+            <span id="vol-val">–</span>
+          </label>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="toasts" id="toasts"></div>
+
+  <dialog id="login">
+    <form method="dialog" id="login-form">
+      <h2>Pair this browser</h2>
+      <p>Enter the pairing token (the <code>PAIRING_TOKEN</code> set on the relay and the agent).</p>
+      <input type="password" id="token" autocomplete="current-password" required placeholder="Pairing token">
+      <p class="error-text" id="login-error"></p>
+      <button class="primary" type="submit">Connect</button>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# VPS alternative to Render: Caddy gets a Let's Encrypt cert and proxies
+# HTTPS + WSS to the container on :8080.
+cast.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

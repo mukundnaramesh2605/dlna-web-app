@@ -8,7 +8,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
     "discover": "node --env-file-if-exists=.env src/cli.js discover",
-    "cast": "node --env-file-if-exists=.env src/cli.js cast"
+    "cast": "node --env-file-if-exists=.env src/cli.js cast",
+    "install-service": "sh scripts/install-launchd.sh",
+    "uninstall-service": "sh scripts/uninstall-launchd.sh"
   },
   "engines": {
     "node": ">=22.9"

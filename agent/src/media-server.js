@@ -48,6 +48,7 @@ export const DLNA_FEATURES = 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000
 /** Resolve a client-supplied relative path inside root, or null if it escapes. */
 export function resolveInside(root, rel) {
   if (typeof rel !== 'string' || rel.includes('\0')) return null;
+  root = path.resolve(root);
   const full = path.resolve(root, rel);
   return full.startsWith(root + path.sep) ? full : null;
 }
