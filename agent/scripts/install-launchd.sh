@@ -26,6 +26,11 @@ cat > "$PLIST" <<PLIST
     <string>src/index.js</string>
   </array>
   <key>WorkingDirectory</key><string>$AGENT_DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd's default PATH lacks Homebrew, so ffmpeg wouldn't be found -->
+    <key>PATH</key><string>$(dirname "$NODE"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
