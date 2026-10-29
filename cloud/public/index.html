@@ -55,8 +55,13 @@
         <div class="selected" id="selected">Pick a file from the list.</div>
         <div class="row">
           <button class="primary" id="cast" disabled>Cast to monitor</button>
-          <label class="check" id="transcode-wrap" title="Convert with ffmpeg on the Mac for formats the monitor can't play (MKV/HEVC etc.)">
-            <input type="checkbox" id="transcode"> Transcode <span class="tag">stretch</span>
+          <label class="check" id="mode-wrap">
+            Transcode
+            <select id="mode">
+              <option value="auto">Auto</option>
+              <option value="transcode">Always</option>
+              <option value="direct">Never</option>
+            </select>
           </label>
         </div>
         <button class="secondary" id="pick-file" disabled title="Opens a file picker on the Mac's screen, then casts the chosen file">Pick a file in Finder &amp; cast…</button>

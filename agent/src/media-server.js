@@ -8,29 +8,72 @@ import { EventEmitter } from 'node:events';
 import { playerPage, indexPage } from './pages.js';
 import { srtToVtt } from './subtitles.js';
 
+// Every extension the agent lists and can cast. Formats a renderer can't take
+// directly (RealMedia, MXF, ...) still play: Auto mode transcodes them.
 export const MIME = {
+  // video
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
+  '.f4v': 'video/mp4',
   '.mov': 'video/quicktime',
+  '.qt': 'video/quicktime',
   '.mkv': 'video/x-matroska',
+  '.mk3d': 'video/x-matroska',
   '.webm': 'video/webm',
   '.avi': 'video/x-msvideo',
+  '.divx': 'video/divx',
+  '.xvid': 'video/x-msvideo',
   '.ts': 'video/mp2t',
   '.m2ts': 'video/mp2t',
+  '.mts': 'video/mp2t',
+  '.m2t': 'video/mp2t',
+  '.tp': 'video/mp2t',
+  '.trp': 'video/mp2t',
   '.mpg': 'video/mpeg',
   '.mpeg': 'video/mpeg',
+  '.mpe': 'video/mpeg',
+  '.m1v': 'video/mpeg',
+  '.m2v': 'video/mpeg',
+  '.vob': 'video/mpeg',
+  '.mod': 'video/mpeg',
+  '.tod': 'video/mpeg',
   '.wmv': 'video/x-ms-wmv',
+  '.asf': 'video/x-ms-asf',
+  '.flv': 'video/x-flv',
   '.3gp': 'video/3gpp',
+  '.3g2': 'video/3gpp2',
+  '.ogv': 'video/ogg',
+  '.rm': 'video/vnd.rn-realvideo',
+  '.rmvb': 'video/vnd.rn-realvideo',
+  '.mxf': 'video/mxf',
+  '.dv': 'video/x-dv',
+  '.nut': 'video/x-nut',
+  '.y4m': 'video/x-yuv4mpeg',
+  // audio
   '.mp3': 'audio/mpeg',
+  '.mp2': 'audio/mpeg',
   '.m4a': 'audio/mp4',
+  '.m4b': 'audio/mp4',
   '.aac': 'audio/aac',
   '.flac': 'audio/flac',
   '.wav': 'audio/wav',
+  '.aif': 'audio/aiff',
+  '.aiff': 'audio/aiff',
   '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
   '.opus': 'audio/ogg',
   '.wma': 'audio/x-ms-wma',
+  '.ac3': 'audio/ac3',
+  '.eac3': 'audio/eac3',
+  '.dts': 'audio/vnd.dts',
+  '.ape': 'audio/ape',
+  '.alac': 'audio/mp4',
+  '.mka': 'audio/x-matroska',
+  '.amr': 'audio/amr',
 };
 const SUBTITLE_MIME = { '.srt': 'text/srt' };
+// Containers a web browser's <video>/<audio> can usually open directly.
+const BROWSER_NATIVE = new Set(['.mp4', '.m4v', '.mov', '.webm', '.ogv', '.mp3', '.m4a', '.aac', '.wav', '.ogg', '.oga', '.opus', '.flac']);
 
 export function kindOf(name) {
   const mime = MIME[path.extname(name).toLowerCase()];
@@ -154,7 +197,8 @@ export function createMediaServer({ getRoot, baseUrl, transcoder }) {
         const full = resolveInside(root, rel);
         if (!full || !kindOf(full) || !fs.existsSync(full)) return notFound(res);
         events.emit('fetch', { path: rel, remote: req.socket.remoteAddress });
-        return transcoder.stream(full, Number(url.searchParams.get('t') || 0), req, res);
+        const format = url.searchParams.get('format') === 'mp4' ? 'mp4' : 'ts';
+        return transcoder.stream(full, Number(url.searchParams.get('t') || 0), req, res, format);
       }
       if (url.pathname === '/player') {
         const rel = url.searchParams.get('f') ?? '';
@@ -162,11 +206,14 @@ export function createMediaServer({ getRoot, baseUrl, transcoder }) {
         if (!full || !kindOf(full) || !fs.existsSync(full)) return notFound(res);
         const sub = findSubtitle(full);
         const subRel = sub && path.relative(root, sub).split(path.sep).join('/');
+        // Containers browsers can't open (AVI, MKV, WMV, ...) get an ffmpeg
+        // fragmented-MP4 stream instead (not seekable, but it plays).
+        const native = BROWSER_NATIVE.has(path.extname(full).toLowerCase());
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(
           playerPage({
             title: path.basename(full),
-            src: `/media/${encodePath(rel)}`,
+            src: native || !transcoder ? `/media/${encodePath(rel)}` : `/transcode/${encodePath(rel)}?format=mp4`,
             subtitles: subRel ? `/subs/${encodePath(subRel)}.vtt` : null,
           }),
         );

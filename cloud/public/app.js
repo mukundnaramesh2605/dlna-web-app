@@ -238,9 +238,9 @@ function renderCast(online) {
   $('#cast').disabled = !online || !file || !currentDeviceId();
   $('#browser').disabled = !online || !file;
   const canTranscode = Boolean(ui.state?.agent?.transcoding);
-  $('#transcode').disabled = !canTranscode;
-  $('#transcode-wrap').title = canTranscode
-    ? 'Convert with ffmpeg on the Mac for formats the monitor can’t play (MKV/HEVC etc.)'
+  $('#mode').disabled = !canTranscode;
+  $('#mode-wrap').title = canTranscode
+    ? 'Auto: play the original when the monitor can decode it, otherwise convert it with ffmpeg on the Mac. Always: always convert. Never: always send the original.'
     : 'Install ffmpeg on the Mac (brew install ffmpeg) to enable transcoding';
 }
 
@@ -250,7 +250,7 @@ function renderNowPlaying(online) {
   const transport = s?.transport ?? 'STOPPED';
   $('#now-title').textContent = session ? session.name : 'Nothing playing';
   $('#now-sub').textContent = session
-    ? `on ${session.deviceName} · ${prettyTransport(transport)}${session.transcode ? ' · transcoding' : ''}`
+    ? `on ${session.deviceName} · ${prettyTransport(transport)}${session.transcode ? ` · transcoding (${session.transcodeReason})` : ''}`
     : '';
   $('#now-warning').hidden = !session?.warning;
   $('#now-warning').textContent = session?.warning ?? '';
@@ -328,7 +328,7 @@ async function castSelected() {
   if (!ui.selectedFile || !deviceId) return;
   $('#cast').disabled = true;
   $('#cast').textContent = 'Casting…';
-  const res = await run('play', { file: ui.selectedFile, deviceId, transcode: $('#transcode').checked });
+  const res = await run('play', { file: ui.selectedFile, deviceId, mode: $('#mode').value });
   $('#cast').textContent = 'Cast to monitor';
   render();
   if (res?.warning) toast(res.warning, 'warn');
@@ -372,6 +372,8 @@ async function withPicker(button, fn) {
 
 function bind() {
   $('#cast').onclick = castSelected;
+  $('#mode').value = storage.get('castMode') ?? 'auto';
+  $('#mode').onchange = () => storage.set('castMode', $('#mode').value);
   $('#browser').onclick = openInBrowser;
   $('#copy-url').onclick = async () => {
     try {

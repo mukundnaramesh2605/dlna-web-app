@@ -11,21 +11,21 @@ import { listMedia, resolveInside, kindOf, mimeOf, findSubtitle, encodePath } fr
 import { expandHome } from './config.js';
 import { chooseInFinder } from './finder.js';
 
-// Containers that commonly carry codecs Samsung's DLNA player rejects.
-const RISKY_EXTS = new Set(['.mkv', '.avi', '.wmv', '.flv', '.webm']);
+import { transcodeReason } from './compat.js';
 
 export function createController({ config, store, transcoder }) {
   const baseUrl = `http://${config.host}:${config.port}`;
   let mediaDir = validDir(store.get('mediaDir')) ? store.get('mediaDir') : config.mediaDir;
   const devices = new Map();
   let scanning = false;
-  let session = null; // { file, name, kind, mime, device, renderer, url, transcode, offset, duration, fetched, startedAt, warning }
+  let session = null; // see startCast()
   let live = { transport: 'NO_MEDIA_PRESENT', position: 0, duration: 0, volume: null };
   let error = null; // async problems discovered while polling: { code, message }
   let listener = () => {};
   let pollTimer = null;
   let pollFailures = 0;
   let pollTick = 0;
+  let pollGeneration = 0;
   let caffeinate = null;
   const lastFetch = new Map(); // relative path -> time the media server last served it
 
@@ -52,7 +52,9 @@ export function createController({ config, store, transcoder }) {
         deviceId: session.device.id,
         deviceName: session.device.name,
         url: session.url,
+        mode: session.mode,
         transcode: session.transcode,
+        transcodeReason: session.reason,
         warning: session.warning,
       },
       ...live,
@@ -61,6 +63,17 @@ export function createController({ config, store, transcoder }) {
   }
 
   const changed = () => listener(state());
+
+  // Per-monitor memory of file types that failed to play directly, so Auto
+  // goes straight to transcoding next time instead of failing first.
+  const learnedFailures = (deviceId) => store.get('directFailures')?.[deviceId] ?? [];
+  function learnFailure(deviceId, ext) {
+    const all = store.get('directFailures') ?? {};
+    if (all[deviceId]?.includes(ext)) return;
+    all[deviceId] = [...(all[deviceId] ?? []), ext];
+    store.set('directFailures', all);
+    console.log(`[cast] remembering that ${ext} needs transcoding on this monitor`);
+  }
 
   async function rescan() {
     if (scanning) return;
@@ -90,32 +103,61 @@ export function createController({ config, store, transcoder }) {
     return session;
   }
 
-  async function play({ file, deviceId, transcode = false }) {
+  /**
+   * mode: 'auto' (default) streams the original when the monitor can decode it
+   * and an ffmpeg conversion when it can't; 'transcode' always converts;
+   * 'direct' never does. `transcode: true` is the older spelling of mode 'transcode'.
+   */
+  async function play({ file, deviceId, mode, transcode }) {
+    mode = mode ?? (transcode ? 'transcode' : 'auto');
     const full = requireFile(file);
     const device = devices.get(deviceId);
     if (!device) throw new AgentError('DEVICE_UNKNOWN', 'That device is no longer known — rescan and pick it again');
-    if (transcode && !transcoder) throw new AgentError('NO_FFMPEG', 'Transcoding needs ffmpeg installed on the Mac (brew install ffmpeg)');
+    if (mode === 'transcode' && !transcoder) throw new AgentError('NO_FFMPEG', 'Transcoding needs ffmpeg installed on the Mac (brew install ffmpeg)');
 
     const renderer = new Renderer(device);
-    const kind = kindOf(full);
-    const ext = path.extname(full).toLowerCase();
-    let warning = null;
-    let mime = mimeOf(full);
-    let duration = 0;
-
     // The renderer's advertised formats: used to pick MIME spellings it knows
-    // and to explain "unsupported" before the cast fails.
+    // and, with ffprobe's codec info, to decide whether the file plays as-is.
     const sink = await renderer.sinkMimeTypes().catch(() => null);
+    const picked = pickMime(mimeOf(full), sink);
+
+    const ext = path.extname(full).toLowerCase();
+    let reason = null; // why we're transcoding; null = stream the original
+    if (mode === 'transcode') reason = 'Transcode set to Always';
+    else if (mode === 'auto' && transcoder && learnedFailures(device.id).includes(ext)) {
+      reason = `${ext} files didn't play directly on this monitor before`;
+    } else if (mode === 'auto' && transcoder) {
+      const info = await transcoder.probe(full).catch(() => null);
+      reason = info ? transcodeReason(info, picked.supported) : picked.supported ? null : 'container not supported by the monitor';
+    }
+    let warning = null;
+    if (!reason && !picked.supported) {
+      warning = `The monitor doesn't list ${picked.mime} as supported; playback may fail.`;
+      warning += transcoder ? ' Set Transcode to Always if it does.' : ' Install ffmpeg (brew install ffmpeg) so the agent can convert it.';
+    }
+
+    const params = { file, full, device, renderer, sink, mime: picked.mime, mode, warning };
+    try {
+      await startCast({ ...params, reason });
+    } catch (err) {
+      // The monitor refused the original outright: convert it instead.
+      if (err.code !== 'UNSUPPORTED_FORMAT' || reason || mode !== 'auto' || !transcoder) throw err;
+      console.log(`[cast] monitor rejected ${file} (${err.message}); retrying with transcoding`);
+      learnFailure(device.id, ext);
+      await startCast({ ...params, warning: null, reason: 'the monitor rejected the original file' });
+    }
+    return { warning: session.warning, transcodeReason: session.reason };
+  }
+
+  /** Load a file on the renderer (original or transcoded) and start a new session. */
+  async function startCast({ file, full, device, renderer, sink, mime, mode, reason, warning }) {
+    const transcode = Boolean(reason);
+    const kind = kindOf(full);
+    let duration = 0;
     if (transcode) {
       const info = await transcoder.probe(full);
       duration = info.duration;
       mime = pickMime(info.video ? 'video/mp2t' : 'audio/mpeg', sink).mime;
-    } else {
-      const picked = pickMime(mime, sink);
-      mime = picked.mime;
-      if (!picked.supported) warning = `The monitor doesn't list ${mime} as supported; playback may fail.`;
-      else if (RISKY_EXTS.has(ext)) warning = `${ext} files often use codecs the monitor can't decode (e.g. HEVC, DTS).`;
-      if (warning && transcoder) warning += ' If it fails, enable Transcode.';
     }
 
     const url = transcode ? transcodeUrl(file, 0) : mediaUrl(file);
@@ -132,17 +174,19 @@ export function createController({ config, store, transcoder }) {
       seekable: !transcode,
     });
 
-    console.log(`[cast] ${file} -> ${device.name} (${url})`);
+    console.log(`[cast] ${file} -> ${device.name} ${transcode ? `(transcoding: ${reason})` : '(original file)'}`);
     const startedAt = Date.now();
     await renderer.cast(url, didl);
 
-    session = { file, name: path.basename(full), kind, mime, device, renderer, url, transcode, offset: 0, duration, startedAt, warning };
+    session = {
+      file, full, name: path.basename(full), kind, mime, sink, device, renderer, url, mode,
+      transcode, reason, offset: 0, duration, startedAt, warning, seenActive: false, retried: false,
+    };
     error = null;
     live = { transport: 'TRANSITIONING', position: 0, duration, volume: live.volume };
     store.set('lastDeviceId', device.id);
     startPolling();
     changed();
-    return { warning };
   }
 
   async function seek({ seconds }) {
@@ -153,6 +197,7 @@ export function createController({ config, store, transcoder }) {
       const didl = buildDidl({ title: s.name, url: transcodeUrl(s.file, target), mime: s.mime, kind: s.kind, duration: s.duration, seekable: false });
       await s.renderer.cast(transcodeUrl(s.file, target), didl);
       s.offset = target;
+      if (error?.code === 'RENDERER_ERROR') error = null; // fresh stream, fresh start
     } else {
       await s.renderer.seek(target);
     }
@@ -199,9 +244,10 @@ export function createController({ config, store, transcoder }) {
   function startPolling() {
     clearTimeout(pollTimer);
     pollFailures = 0;
+    const generation = ++pollGeneration; // a newer startPolling() retires this loop
     const loop = async () => {
       await poll();
-      if (session) pollTimer = setTimeout(loop, 1000);
+      if (session && generation === pollGeneration) pollTimer = setTimeout(loop, 1000);
     };
     pollTimer = setTimeout(loop, 500);
   }
@@ -221,6 +267,24 @@ export function createController({ config, store, transcoder }) {
       }
       pollFailures = 0;
       if (error?.code === 'RENDERER_OFFLINE') error = null;
+
+      // Auto mode: if the monitor gives up on the original file right after
+      // starting (error status, or back to STOPPED without playing), it most
+      // likely can't decode it. Recast once through ffmpeg.
+      if (['PLAYING', 'TRANSITIONING', 'PAUSED_PLAYBACK'].includes(t.state)) s.seenActive = true;
+      const gaveUp =
+        (t.status && t.status !== 'OK') ||
+        (s.seenActive && ['STOPPED', 'NO_MEDIA_PRESENT'].includes(t.state) && p.position < 3);
+      if (gaveUp && s.mode === 'auto' && !s.transcode && !s.retried && transcoder && Date.now() - s.startedAt < 30_000) {
+        s.retried = true;
+        console.log(`[cast] monitor stopped ${s.file} (${t.state}/${t.status}); retrying with transcoding`);
+        learnFailure(s.device.id, path.extname(s.full).toLowerCase());
+        startCast({ ...s, warning: null, reason: 'the monitor could not play the original file' }).catch((err) => {
+          error = { code: err.code ?? 'ERROR', message: err.message };
+          changed();
+        });
+        return;
+      }
 
       if (t.status && t.status !== 'OK') {
         error = { code: 'RENDERER_ERROR', message: `The monitor reported "${t.status}" — the file may use an unsupported codec/container.` };

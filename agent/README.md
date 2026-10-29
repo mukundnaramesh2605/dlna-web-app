@@ -79,5 +79,5 @@ Samsung firmware wants specific DLNA headers and flags.
 ## Commands the relay can send
 
 `getState`, `listFiles`, `setFolder {path}`, `rescan`, `selectDevice {deviceId}`,
-`play {file, deviceId, transcode}`, `pause`, `resume`, `stop`, `seek {seconds}`,
+`play {file, deviceId, mode: auto|transcode|direct}`, `pause`, `resume`, `stop`, `seek {seconds}`,
 `volume {level}`, `browserLink {file}`.

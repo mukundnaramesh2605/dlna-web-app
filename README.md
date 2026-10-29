@@ -114,16 +114,30 @@ It plays in a plain HTML5 player served by the agent.
 | Mac asleep, agent stopped, or Mac offline | Yellow **Agent offline** banner; controls disabled. The relay notices within about 30s (ping timeout). |
 | Monitor off or off the network | **Monitor offline**: SOAP calls time out or 3 polls fail in a row |
 | Monitor never fetched the media URL | **Monitor can't reach the Mac** after 10s: usually the macOS firewall |
-| Unsupported codec or container | UPnP error 714/704 explained, plus a warning before casting when the monitor doesn't list the MIME type or the file is MKV/AVI etc. |
+| Unsupported codec or container | In Auto mode it's converted with ffmpeg automatically, and the status line says why ("transcoding (dts audio)"). Without ffmpeg, UPnP error 714/704 is explained and a warning appears before casting when the monitor doesn't list the format. |
 | Relay unreachable | Red **Relay offline** pill; the UI reconnects every 2s |
 
 ## Stretch features (optional; the core works without them)
 
-- **ffmpeg transcoding.** Tick **Transcode** to stream an H.264/AAC MPEG-TS
-  version made on the fly. H.264 video and AAC/AC3/MP3 audio are copied
-  rather than re-encoded. HEVC and other codecs use the Mac's hardware
-  encoder (`h264_videotoolbox`). Seeking restarts ffmpeg at the new
-  timestamp. Needs `brew install ffmpeg`.
+- **Any video format (ffmpeg).** About 60 video and audio extensions are
+  listed, including AVI, MKV, WMV, VOB, MTS, RMVB, MXF, OGV and FLAC. The
+  **Transcode** selector has three modes:
+  - **Auto** (default): ffprobe reads each file's codecs and compares them
+    with the formats the monitor advertises. Files it can decode are
+    streamed unchanged; anything else is converted on the fly.
+  - **Always**: always convert.
+  - **Never**: always send the original file.
+
+  If an unconverted file still fails (the monitor errors or stops within
+  the first seconds), Auto switches to transcoding by itself. It also
+  remembers that file extension for that monitor, so the next file of the
+  same type converts straight away. Your Samsung needed this for Xvid AVIs
+  ("packed bitstream"). Conversion keeps H.264, HEVC and MPEG-2 video and
+  AAC/AC3 audio as-is, re-encodes anything else with the Mac's hardware
+  encoder (`h264_videotoolbox`), and outputs MPEG-TS. Seeking restarts
+  ffmpeg at the new timestamp. The browser-fallback player gets a
+  fragmented-MP4 conversion for containers browsers can't open, which
+  can't be seeked. Needs `brew install ffmpeg`.
 - **External `.srt` subtitles.** When `movie.srt` sits next to `movie.mp4`,
   it's offered to Samsung renderers (`CaptionInfo.sec` header +
   `sec:CaptionInfoEx`) and to the browser player (converted to WebVTT).
