@@ -1,0 +1,22 @@
+{
+  "name": "dlna-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local DLNA agent: serves media on the LAN and controls UPnP renderers, driven from the cloud relay.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "discover": "node --env-file-if-exists=.env src/cli.js discover",
+    "cast": "node --env-file-if-exists=.env src/cli.js cast"
+  },
+  "engines": {
+    "node": ">=22.9"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.22.0"
+  }
+}
