@@ -9,6 +9,7 @@ import { Renderer, AgentError } from './upnp.js';
 import { buildDidl, pickMime } from './didl.js';
 import { listMedia, resolveInside, kindOf, mimeOf, findSubtitle, encodePath } from './media-server.js';
 import { expandHome } from './config.js';
+import { chooseInFinder } from './finder.js';
 
 // Containers that commonly carry codecs Samsung's DLNA player rejects.
 const RISKY_EXTS = new Set(['.mkv', '.avi', '.wmv', '.flv', '.webm']);
@@ -171,12 +172,26 @@ export function createController({ config, store, transcoder }) {
   }
 
   async function setFolder({ path: dir }) {
-    const resolved = path.resolve(expandHome(String(dir ?? '')));
-    if (!validDir(resolved)) throw new AgentError('BAD_FOLDER', `Not a readable folder on the Mac: ${resolved}`);
+    const resolved = cleanPath(dir);
+    checkReadable(resolved);
     mediaDir = resolved;
     store.set('mediaDir', resolved);
     changed();
     return { root: mediaDir, files: await listMedia(mediaDir) };
+  }
+
+  async function pickFolder() {
+    const picked = await chooseInFinder({ kind: 'folder', defaultDir: mediaDir });
+    return picked ? setFolder({ path: picked }) : { cancelled: true };
+  }
+
+  /** Pick one file in Finder. Keeps the current folder if the file is inside it, else switches to the file's folder. */
+  async function pickFile() {
+    const picked = await chooseInFinder({ kind: 'file', defaultDir: mediaDir });
+    if (!picked) return { cancelled: true };
+    if (!kindOf(picked)) throw new AgentError('UNSUPPORTED_FORMAT', `Not a video or audio file: ${path.basename(picked)}`);
+    if (!resolveInside(mediaDir, path.relative(mediaDir, picked))) await setFolder({ path: path.dirname(picked) });
+    return { root: mediaDir, files: await listMedia(mediaDir), file: path.relative(mediaDir, picked).split(path.sep).join('/') };
   }
 
   // --- polling -------------------------------------------------------------
@@ -240,6 +255,8 @@ export function createController({ config, store, transcoder }) {
     getState: () => state(),
     listFiles: async () => ({ root: mediaDir, files: await listMedia(mediaDir) }),
     setFolder,
+    pickFolder,
+    pickFile,
     rescan: async () => {
       await rescan();
       return state().devices;
@@ -295,6 +312,38 @@ export function createController({ config, store, transcoder }) {
       if (session?.file === rel && error?.code === 'URL_UNREACHABLE') error = null;
     },
   };
+}
+
+/**
+ * Turn a pasted path into an absolute one. Handles what Finder and Terminal
+ * produce: surrounding quotes ('/Volumes/My Drive'), backslash-escaped spaces
+ * (/Volumes/My\ Drive) and file:// URLs.
+ */
+export function cleanPath(input) {
+  let p = String(input ?? '').trim();
+  if (/^(['"]).*\1$/.test(p)) p = p.slice(1, -1);
+  else p = p.replace(/\\(.)/g, '$1');
+  if (p.startsWith('file://')) p = decodeURIComponent(new URL(p).pathname);
+  p = expandHome(p);
+  if (!path.isAbsolute(p)) throw new AgentError('BAD_FOLDER', `Use a full path starting with / or ~ (got "${input}")`);
+  return path.resolve(p);
+}
+
+function checkReadable(dir) {
+  try {
+    if (!fs.statSync(dir).isDirectory()) throw new AgentError('BAD_FOLDER', `Not a folder: ${dir}`);
+    fs.readdirSync(dir);
+  } catch (err) {
+    if (err instanceof AgentError) throw err;
+    if (err.code === 'ENOENT') throw new AgentError('BAD_FOLDER', `No such folder on the Mac: ${dir}`);
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      throw new AgentError(
+        'NO_PERMISSION',
+        `macOS blocked the agent from reading ${dir}. Allow "node" under System Settings › Privacy & Security › Files and Folders (Removable Volumes) or Full Disk Access, then restart the agent.`,
+      );
+    }
+    throw new AgentError('BAD_FOLDER', `Cannot read ${dir}: ${err.message}`);
+  }
 }
 
 function validDir(p) {

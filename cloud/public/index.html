@@ -29,7 +29,10 @@
     <section class="card files">
       <div class="card-head">
         <h2>Files</h2>
-        <button class="ghost small" id="change-folder">Change folder</button>
+        <div>
+          <button class="ghost small" id="pick-folder" title="Opens a folder picker on the Mac's screen">Choose in Finder…</button>
+          <button class="ghost small" id="change-folder" title="Type or paste a folder path">Enter path</button>
+        </div>
       </div>
       <div class="folder" id="folder" title="Media folder on the Mac">—</div>
       <input type="search" id="filter" placeholder="Filter files…" autocomplete="off">
@@ -56,6 +59,7 @@
             <input type="checkbox" id="transcode"> Transcode <span class="tag">stretch</span>
           </label>
         </div>
+        <button class="secondary" id="pick-file" disabled title="Opens a file picker on the Mac's screen, then casts the chosen file">Pick a file in Finder &amp; cast…</button>
         <button class="secondary" id="browser" disabled>Open in monitor's browser</button>
         <div class="fallback" id="fallback" hidden>
           <img id="qr" alt="QR code for the player URL">

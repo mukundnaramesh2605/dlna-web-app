@@ -14,7 +14,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT || 8080);
 const TOKEN = process.env.PAIRING_TOKEN || '';
-const COMMAND_TIMEOUT_MS = 30_000;
+const COMMAND_TIMEOUT_MS = 300_000; // long enough for a Finder picker on the Mac; a dropped agent fails fast anyway
 const HEARTBEAT_MS = 15_000;
 
 if (TOKEN.length < 16) {

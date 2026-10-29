@@ -18,6 +18,7 @@ const ui = {
   selectedFile: null,
   deviceId: null,
   seeking: false,
+  picking: false, // a Finder dialog is open on the Mac
 };
 
 // --- storage (may be unavailable in private windows) ----------------------
@@ -102,9 +103,10 @@ function cmd(action, params = {}) {
     const id = nextId++;
     waiting.set(id, { resolve, reject });
     ws.send(JSON.stringify({ type: 'cmd', id, action, params }));
+    // Long, because Finder pickers wait for someone at the Mac.
     setTimeout(() => {
       if (waiting.delete(id)) reject(new Error(`No reply for "${action}".`));
-    }, 40_000);
+    }, 330_000);
   });
 }
 
@@ -188,6 +190,8 @@ function render() {
 
   $('#folder').textContent = ui.filesRoot || s?.agent?.mediaDir || '—';
   $('#change-folder').disabled = !online;
+  $('#pick-folder').disabled = !online || ui.picking;
+  $('#pick-file').disabled = !online || ui.picking;
   $('#filter').disabled = !online && !ui.files.length;
 
   renderDevices(online);
@@ -341,6 +345,31 @@ async function openInBrowser() {
   $('#fallback').hidden = false;
 }
 
+function applyFolder(res) {
+  if (!res || res.cancelled) return;
+  ui.files = res.files;
+  ui.filesRoot = res.root;
+  ui.selectedFile = null;
+  render();
+}
+
+/** Run a Finder-picker action, with a hint that the dialog is on the Mac's screen. */
+async function withPicker(button, fn) {
+  const btn = $(button);
+  const label = btn.textContent;
+  btn.textContent = 'Waiting for Finder on the Mac…';
+  ui.picking = true;
+  render();
+  toast('A Finder dialog is open on the Mac. Make your choice there.');
+  try {
+    await fn();
+  } finally {
+    ui.picking = false;
+    btn.textContent = label;
+    render();
+  }
+}
+
 function bind() {
   $('#cast').onclick = castSelected;
   $('#browser').onclick = openInBrowser;
@@ -356,14 +385,20 @@ function bind() {
   $('#change-folder').onclick = async () => {
     const dir = prompt('Media folder on the Mac (absolute path or ~/…):', ui.filesRoot);
     if (!dir) return;
-    const res = await run('setFolder', { path: dir });
-    if (res) {
-      ui.files = res.files;
-      ui.filesRoot = res.root;
-      ui.selectedFile = null;
-      render();
-    }
+    applyFolder(await run('setFolder', { path: dir }));
   };
+  $('#pick-folder').onclick = () => withPicker('#pick-folder', async () => {
+    applyFolder(await run('pickFolder'));
+  });
+  $('#pick-file').onclick = () => withPicker('#pick-file', async () => {
+    const res = await run('pickFile');
+    if (!res || res.cancelled) return;
+    applyFolder(res);
+    ui.selectedFile = res.file;
+    render();
+    if (currentDeviceId()) await castSelected();
+    else toast('File selected. Pick a device, then press Cast.');
+  });
   $('#filter').oninput = (e) => {
     ui.filter = e.target.value;
     renderFiles();
