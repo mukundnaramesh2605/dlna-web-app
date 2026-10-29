@@ -5,7 +5,7 @@ services:
     runtime: docker
     rootDir: cloud
     dockerfilePath: ./Dockerfile
-    plan: starter # the free plan spins down when idle; see README
+    plan: free # sleeps after ~15 min without HTTP requests; the agent's keep-alive ping prevents that
     healthCheckPath: /healthz
     envVars:
       - key: PAIRING_TOKEN

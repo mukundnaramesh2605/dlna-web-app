@@ -60,5 +60,18 @@ export function connectRelay({ url, token, onCommand, onConnect }) {
   }
 
   open();
+  startKeepAlive(url);
   return { send };
+}
+
+// Free hosting tiers (e.g. Render free) sleep after ~15 min without inbound
+// HTTP requests, and an open WebSocket may not count. A periodic GET to
+// /healthz keeps the relay awake. KEEPALIVE_MINUTES=0 turns it off.
+function startKeepAlive(relayUrl) {
+  const minutes = Number(process.env.KEEPALIVE_MINUTES ?? 10);
+  if (!(minutes > 0)) return;
+  const health = new URL('/healthz', relayUrl.replace(/^ws/, 'http')).href;
+  setInterval(() => {
+    fetch(health, { signal: AbortSignal.timeout(30_000) }).catch(() => {});
+  }, minutes * 60_000).unref();
 }

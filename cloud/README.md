@@ -33,11 +33,18 @@ npm start               # http://localhost:8080, agent RELAY_URL=ws://localhost:
 Render terminates TLS, so the UI is served over HTTPS and the sockets over
 WSS automatically. `FORCE_HTTPS=1` redirects any plain-HTTP request.
 
-**Plan choice:** Render's free web services spin down after about 15 minutes
-without inbound HTTP traffic and take roughly a minute to wake. The agent's
-WebSocket may not count as traffic, and a spin-down drops it until the next
-page load. Use the `starter` plan (the Blueprint default), or a VPS, for a
-relay that's always on.
+**Free plan:** the Blueprint uses Render's free instance type, so no payment
+is needed. Free services sleep after about 15 minutes without inbound HTTP
+requests and take about a minute to wake. To prevent that, the agent requests
+`/healthz` every 10 minutes (`KEEPALIVE_MINUTES` in the agent's `.env`; `0`
+disables it). One always-on free service fits inside Render's 750 free
+instance-hours a month. Render can still restart free instances now and then;
+the agent reconnects automatically.
+
+If Render still asks for a card on the Blueprint flow, create the service by
+hand instead: **New › Web Service**, pick the repo, set **Root Directory** to
+`cloud`, **Runtime** Docker, **Instance Type** Free, then add the
+`PAIRING_TOKEN` and `FORCE_HTTPS=1` environment variables.
 
 ## Deploy on a VPS
 

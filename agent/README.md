@@ -19,6 +19,7 @@ npm start
 | `MEDIA_DIR` | `~/Movies` | Folder to serve (searched recursively). The UI can change it later. |
 | `HTTP_PORT` | `8200` | LAN port the monitor streams from |
 | `AGENT_HOST` | auto (en0 IPv4) | LAN IP to put in media URLs, if auto-detect picks the wrong one |
+| `KEEPALIVE_MINUTES` | `10` | How often to request the relay's `/healthz` so a free Render instance doesn't sleep; `0` disables |
 
 ## Testing on the LAN without the cloud
 
