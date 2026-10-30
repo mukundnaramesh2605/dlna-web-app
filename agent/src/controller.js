@@ -59,10 +59,70 @@ export function createController({ config, store, transcoder }) {
       },
       ...live,
       error,
+      continueWatching: continueWatching(),
+      folderProgress: folderProgress(),
     };
   }
 
   const changed = () => listener(state());
+
+  // --- continue watching ----------------------------------------------------
+  // Progress is keyed by absolute path, so it survives changing folders.
+  // { [fullPath]: { name, position, duration, updatedAt } }, newest 200 kept.
+  const progressAll = () => store.get('progress') ?? {};
+
+  function saveProgress(s, position, duration) {
+    const all = progressAll();
+    const finished = duration > 0 && (duration - position < 90 || position / duration > 0.95);
+    if (finished || position < 15) {
+      if (!(s.full in all)) return;
+      delete all[s.full];
+    } else {
+      all[s.full] = { name: s.name, position: Math.floor(position), duration: Math.floor(duration), updatedAt: Date.now() };
+      const keys = Object.keys(all).sort((a, b) => all[b].updatedAt - all[a].updatedAt);
+      for (const k of keys.slice(200)) delete all[k];
+    }
+    store.set('progress', all);
+  }
+
+  /** Most recent unfinished items, for the UI's "Continue watching" row. */
+  function continueWatching() {
+    return Object.entries(progressAll())
+      .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+      .slice(0, 12)
+      .map(([id, p]) => ({ id, ...p, folder: path.basename(path.dirname(id)) }));
+  }
+
+  /** Saved positions for files in the current folder, keyed by relative path. */
+  function folderProgress() {
+    const out = {};
+    for (const [id, p] of Object.entries(progressAll())) {
+      const rel = path.relative(mediaDir, id);
+      if (resolveInside(mediaDir, rel)) out[rel.split(path.sep).join('/')] = { position: p.position, duration: p.duration };
+    }
+    return out;
+  }
+
+  async function continueItem({ id, deviceId, mode }) {
+    const entry = progressAll()[id];
+    if (!entry) throw new AgentError('NOT_FOUND', 'That item is no longer in Continue watching');
+    if (!fs.existsSync(id)) {
+      forget({ id });
+      throw new AgentError('FILE_NOT_FOUND', `${entry.name} is gone (drive unplugged or file moved)`);
+    }
+    if (!resolveInside(mediaDir, path.relative(mediaDir, id))) await setFolder({ path: path.dirname(id) });
+    const file = path.relative(mediaDir, id).split(path.sep).join('/');
+    const result = await play({ file, deviceId, mode, startAt: entry.position });
+    return { ...result, root: mediaDir, files: await listMedia(mediaDir), file };
+  }
+
+  function forget({ id }) {
+    const all = progressAll();
+    if (!(id in all)) return;
+    delete all[id];
+    store.set('progress', all);
+    changed();
+  }
 
   // Per-monitor memory of file types that failed to play directly, so Auto
   // goes straight to transcoding next time instead of failing first.
@@ -108,8 +168,9 @@ export function createController({ config, store, transcoder }) {
    * and an ffmpeg conversion when it can't; 'transcode' always converts;
    * 'direct' never does. `transcode: true` is the older spelling of mode 'transcode'.
    */
-  async function play({ file, deviceId, mode, transcode }) {
+  async function play({ file, deviceId, mode, transcode, startAt = 0 }) {
     mode = mode ?? (transcode ? 'transcode' : 'auto');
+    startAt = Math.max(0, Number(startAt) || 0);
     const full = requireFile(file);
     const device = devices.get(deviceId);
     if (!device) throw new AgentError('DEVICE_UNKNOWN', 'That device is no longer known — rescan and pick it again');
@@ -136,7 +197,7 @@ export function createController({ config, store, transcoder }) {
       warning += transcoder ? ' Set Transcode to Always if it does.' : ' Install ffmpeg (brew install ffmpeg) so the agent can convert it.';
     }
 
-    const params = { file, full, device, renderer, sink, mime: picked.mime, mode, warning };
+    const params = { file, full, device, renderer, sink, mime: picked.mime, mode, warning, startAt };
     try {
       await startCast({ ...params, reason });
     } catch (err) {
@@ -150,7 +211,7 @@ export function createController({ config, store, transcoder }) {
   }
 
   /** Load a file on the renderer (original or transcoded) and start a new session. */
-  async function startCast({ file, full, device, renderer, sink, mime, mode, reason, warning }) {
+  async function startCast({ file, full, device, renderer, sink, mime, mode, reason, warning, startAt = 0 }) {
     const transcode = Boolean(reason);
     const kind = kindOf(full);
     let duration = 0;
@@ -160,7 +221,9 @@ export function createController({ config, store, transcoder }) {
       mime = pickMime(info.video ? 'video/mp2t' : 'audio/mpeg', sink).mime;
     }
 
-    const url = transcode ? transcodeUrl(file, 0) : mediaUrl(file);
+    // Resuming: a transcoded stream simply starts at startAt; the original
+    // file is seeked once the monitor reports PLAYING (see poll()).
+    const url = transcode ? transcodeUrl(file, startAt) : mediaUrl(file);
     const sub = kind === 'video' ? findSubtitle(full) : null;
     const subtitleUrl = sub ? mediaUrl(path.relative(mediaDir, sub).split(path.sep).join('/')) : null;
     const didl = buildDidl({
@@ -180,10 +243,19 @@ export function createController({ config, store, transcoder }) {
 
     session = {
       file, full, name: path.basename(full), kind, mime, sink, device, renderer, url, mode,
-      transcode, reason, offset: 0, duration, startedAt, warning, seenActive: false, retried: false,
+      transcode, reason, offset: transcode ? startAt : 0, duration, startedAt, warning, seenActive: false, retried: false,
+      startAt, // requested start position, kept so a transcode fallback resumes at the same spot
+      resumeAt: transcode ? 0 : startAt, // pending seek for the original file
+      resumeTries: 0,
+      saveAfter: startedAt + (startAt ? 10_000 : 0), // don't record progress until a resume has settled
+      lastSaved: 0,
+      lastPos: startAt,
+      lastState: 'TRANSITIONING',
+      lastStatus: 'OK',
+      warnedUnreachable: false,
     };
     error = null;
-    live = { transport: 'TRANSITIONING', position: 0, duration, volume: live.volume };
+    live = { transport: 'TRANSITIONING', position: startAt, duration, volume: live.volume };
     store.set('lastDeviceId', device.id);
     startPolling();
     changed();
@@ -267,6 +339,34 @@ export function createController({ config, store, transcoder }) {
       }
       pollFailures = 0;
       if (error?.code === 'RENDERER_OFFLINE') error = null;
+      const elapsed = Date.now() - s.startedAt;
+
+      // Resuming the original file: seek once the monitor is actually playing
+      // (Samsung refuses Seek while TRANSITIONING). Retry a few times.
+      if (s.resumeAt && t.state === 'PLAYING') {
+        const at = s.resumeAt;
+        s.resumeAt = 0;
+        s.saveAfter = Date.now() + 8000;
+        s.renderer.seek(at).catch((err) => {
+          if (++s.resumeTries < 5) s.resumeAt = at;
+          else console.warn(`[cast] could not resume at ${at}s: ${err.message}`);
+        });
+      }
+
+      // Remember where we are. A PLAYING -> STOPPED change also records the
+      // last position: that's the viewer stopping on the monitor, or the end
+      // (which saveProgress turns into "finished").
+      if (t.state === 'PLAYING' && Date.now() >= s.saveAfter) {
+        s.lastPos = live.position;
+        if (Date.now() - s.lastSaved > 10_000) {
+          saveProgress(s, live.position, live.duration);
+          s.lastSaved = Date.now();
+        }
+      }
+      if (s.lastState === 'PLAYING' && t.state !== 'PLAYING' && Date.now() >= s.saveAfter) {
+        saveProgress(s, s.lastPos, live.duration);
+      }
+      s.lastState = t.state;
 
       // Auto mode: if the monitor gives up on the original file right after
       // starting (error status, or back to STOPPED without playing), it most
@@ -275,7 +375,7 @@ export function createController({ config, store, transcoder }) {
       const gaveUp =
         (t.status && t.status !== 'OK') ||
         (s.seenActive && ['STOPPED', 'NO_MEDIA_PRESENT'].includes(t.state) && p.position < 3);
-      if (gaveUp && s.mode === 'auto' && !s.transcode && !s.retried && transcoder && Date.now() - s.startedAt < 30_000) {
+      if (gaveUp && s.mode === 'auto' && !s.transcode && !s.retried && transcoder && elapsed < 30_000) {
         s.retried = true;
         console.log(`[cast] monitor stopped ${s.file} (${t.state}/${t.status}); retrying with transcoding`);
         learnFailure(s.device.id, path.extname(s.full).toLowerCase());
@@ -286,16 +386,24 @@ export function createController({ config, store, transcoder }) {
         return;
       }
 
-      if (t.status && t.status !== 'OK') {
+      // Errors are raised once, when the problem starts, so a dismissed
+      // error stays dismissed. Samsung also reports ERROR_OCCURRED when you
+      // leave playback with the remote, so an error after the video has been
+      // playing for a while just means "stopped on the monitor", not a fault.
+      const statusBad = t.status && t.status !== 'OK';
+      if (statusBad && s.lastStatus === 'OK' && (elapsed < 30_000 || s.lastPos < 5)) {
         error = { code: 'RENDERER_ERROR', message: `The monitor reported "${t.status}" — the file may use an unsupported codec/container.` };
-      } else if (!((lastFetch.get(s.file) ?? 0) >= s.startedAt) && Date.now() - s.startedAt > 10_000 && !error) {
+      }
+      s.lastStatus = statusBad ? t.status : 'OK';
+      if (!s.warnedUnreachable && !((lastFetch.get(s.file) ?? 0) >= s.startedAt) && elapsed > 10_000) {
+        s.warnedUnreachable = true;
         error = {
           code: 'URL_UNREACHABLE',
           message: `The monitor hasn't requested ${s.url}. Check that the Mac firewall allows incoming connections for node, and that both are on the same network.`,
         };
       }
     } catch (err) {
-      if (++pollFailures >= 3) error = { code: 'RENDERER_OFFLINE', message: 'Lost contact with the monitor. Is it switched on and connected to Wi-Fi?' };
+      if (++pollFailures === 3) error = { code: 'RENDERER_OFFLINE', message: 'Lost contact with the monitor. Is it switched on and connected to Wi-Fi?' };
     }
     updateCaffeinate();
     changed();
@@ -342,6 +450,7 @@ export function createController({ config, store, transcoder }) {
     },
     stop: async () => {
       const s = requireSession();
+      if (Date.now() >= s.saveAfter && ['PLAYING', 'PAUSED_PLAYBACK'].includes(live.transport)) saveProgress(s, live.position, live.duration);
       session = null;
       clearTimeout(pollTimer);
       live = { transport: 'STOPPED', position: 0, duration: 0, volume: live.volume };
@@ -357,6 +466,12 @@ export function createController({ config, store, transcoder }) {
       changed();
     },
     browserLink,
+    continue: continueItem,
+    forget,
+    dismissError: () => {
+      error = null;
+      changed();
+    },
   };
 
   return {

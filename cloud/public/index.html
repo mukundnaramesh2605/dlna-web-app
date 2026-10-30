@@ -22,8 +22,14 @@
     <span>Your Mac is asleep, offline, or the agent isn't running. Controls come back automatically when it reconnects.</span>
   </div>
   <div class="banner error" id="error" hidden>
-    <strong id="error-title">Problem</strong> <span id="error-text"></span>
+    <div><strong id="error-title">Problem</strong> <span id="error-text"></span></div>
+    <button class="close" id="error-close" aria-label="Dismiss error" title="Dismiss">×</button>
   </div>
+
+  <section class="continue" id="continue" hidden>
+    <h2>Continue watching</h2>
+    <ul class="continue-list" id="continue-list"></ul>
+  </section>
 
   <main class="grid">
     <section class="card files">
@@ -55,6 +61,7 @@
         <div class="selected" id="selected">Pick a file from the list.</div>
         <div class="row">
           <button class="primary" id="cast" disabled>Cast to monitor</button>
+          <button id="start-over" hidden>Start over</button>
           <label class="check" id="mode-wrap">
             Transcode
             <select id="mode">

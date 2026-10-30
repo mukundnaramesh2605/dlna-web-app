@@ -1,3 +1,9 @@
+// Timestamp log lines (the launchd log is otherwise impossible to correlate).
+for (const level of ['log', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => original(new Date().toLocaleString('sv-SE'), ...args); // local "YYYY-MM-DD HH:MM:SS"
+}
+
 import { config } from './config.js';
 import { createStore } from './store.js';
 import { createTranscoder } from './transcode.js';

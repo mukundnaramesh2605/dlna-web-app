@@ -19,6 +19,7 @@ npm start
 | `MEDIA_DIR` | `~/Movies` | Folder to serve (searched recursively). The UI can change it later. |
 | `HTTP_PORT` | `8200` | LAN port the monitor streams from |
 | `AGENT_HOST` | auto (en0 IPv4) | LAN IP to put in media URLs, if auto-detect picks the wrong one |
+| `STATE_FILE` | `~/.config/dlna-agent/state.json` | Where the folder, device, learned formats and watch progress are saved |
 | `KEEPALIVE_MINUTES` | `10` | How often to request the relay's `/healthz` so a free Render instance doesn't sleep; `0` disables |
 
 ## Testing on the LAN without the cloud
@@ -69,7 +70,7 @@ npx pm2 start src/index.js --name dlna-agent --node-args="--env-file=.env" && np
 | Load & play | [`src/upnp.js`](src/upnp.js) | `Stop` → `SetAVTransportURI` → `Play` (retried on 701 while the TV is transitioning) |
 | Serve | [`src/media-server.js`](src/media-server.js) | Range/206 responses, `contentFeatures.dlna.org`, `transferMode.dlna.org` |
 | Track | [`src/controller.js`](src/controller.js) | 1s poll of `GetTransportInfo` / `GetPositionInfo`, volume every 3s |
-| Relay | [`src/relay-client.js`](src/relay-client.js) | One outbound WebSocket, backoff reconnect (1s → 30s), 45s dead-socket watchdog |
+| Relay | [`src/relay-client.js`](src/relay-client.js) | One outbound WebSocket, backoff reconnect (1s → 30s), own 15s pings + 45s dead-socket watchdog |
 
 SSDP is implemented on `node:dgram` instead of the `node-ssdp` package:
 that package has been unmaintained since 2020 and depends on a vulnerable
@@ -80,4 +81,5 @@ Samsung firmware wants specific DLNA headers and flags.
 
 `getState`, `listFiles`, `setFolder {path}`, `rescan`, `selectDevice {deviceId}`,
 `play {file, deviceId, mode: auto|transcode|direct}`, `pause`, `resume`, `stop`, `seek {seconds}`,
-`volume {level}`, `browserLink {file}`.
+`volume {level}`, `browserLink {file}`, `play {…, startAt}`, `continue {id, deviceId, mode}`,
+`forget {id}`, `dismissError`, `pickFolder`, `pickFile`.

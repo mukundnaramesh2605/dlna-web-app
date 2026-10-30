@@ -26,7 +26,7 @@ export const config = {
   host: process.env.AGENT_HOST || detectLanIp(),
   relayUrl: process.env.RELAY_URL || 'ws://localhost:8080/agent',
   token: process.env.PAIRING_TOKEN || '',
-  stateFile: path.join(os.homedir(), '.config', 'dlna-agent', 'state.json'),
+  stateFile: process.env.STATE_FILE || path.join(os.homedir(), '.config', 'dlna-agent', 'state.json'),
 };
 
 export { expandHome };

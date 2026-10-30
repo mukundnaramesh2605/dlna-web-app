@@ -10,8 +10,11 @@ export function connectRelay({ url, token, onCommand, onConnect }) {
   function open() {
     ws = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
     let watchdog;
-    // The relay pings every 15s. If nothing arrives for 45s (e.g. after the Mac
-    // wakes from sleep with a dead TCP connection), drop it and reconnect.
+    let pinger;
+    // We ping the relay every 15s and expect a pong back. If nothing arrives
+    // for 45s (e.g. after the Mac wakes from sleep with a dead TCP connection),
+    // drop it and reconnect. Relying on the relay's own pings isn't enough:
+    // Render's proxy doesn't forward them, which caused a reconnect every 45s.
     const feedWatchdog = () => {
       clearTimeout(watchdog);
       watchdog = setTimeout(() => ws.terminate(), 45_000);
@@ -21,9 +24,11 @@ export function connectRelay({ url, token, onCommand, onConnect }) {
       attempt = 0;
       console.log(`[relay] connected to ${url}`);
       feedWatchdog();
+      pinger = setInterval(() => ws.ping(), 15_000);
       onConnect?.();
     });
     ws.on('ping', feedWatchdog);
+    ws.on('pong', feedWatchdog);
     ws.on('message', async (raw) => {
       feedWatchdog();
       let msg;
@@ -49,6 +54,7 @@ export function connectRelay({ url, token, onCommand, onConnect }) {
     });
     ws.on('close', () => {
       clearTimeout(watchdog);
+      clearInterval(pinger);
       const delay = Math.min(30_000, 1000 * 2 ** attempt++);
       console.log(`[relay] disconnected; reconnecting in ${delay / 1000}s`);
       setTimeout(open, delay);

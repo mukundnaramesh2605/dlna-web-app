@@ -19,6 +19,8 @@ const ui = {
   deviceId: null,
   seeking: false,
   picking: false, // a Finder dialog is open on the Mac
+  casting: false, // a play/continue command is in flight
+  dismissedError: null, // "code|message" of the error the user closed
 };
 
 // --- storage (may be unavailable in private windows) ----------------------
@@ -182,7 +184,8 @@ function render() {
   $('#offline').hidden = online || ui.relay !== 'connected';
 
   const err = online ? s?.error : null;
-  $('#error').hidden = !err;
+  // Hidden straight away on close, without waiting for the agent's state push.
+  $('#error').hidden = !err || `${err.code}|${err.message}` === ui.dismissedError;
   if (err) {
     $('#error-title').textContent = errorTitle(err.code);
     $('#error-text').textContent = err.message;
@@ -194,6 +197,7 @@ function render() {
   $('#pick-file').disabled = !online || ui.picking;
   $('#filter').disabled = !online && !ui.files.length;
 
+  renderContinue(online);
   renderDevices(online);
   renderCast(online);
   renderNowPlaying(online);
@@ -235,7 +239,11 @@ function renderDevices(online) {
 function renderCast(online) {
   const file = ui.files.find((f) => f.path === ui.selectedFile);
   $('#selected').textContent = file ? file.path : 'Pick a file from the list.';
-  $('#cast').disabled = !online || !file || !currentDeviceId();
+  const saved = file && savedProgress(file.path);
+  $('#cast').disabled = !online || !file || !currentDeviceId() || ui.casting;
+  $('#cast').textContent = ui.casting ? 'Casting…' : saved ? `Resume at ${fmtTime(saved.position)}` : 'Cast to monitor';
+  $('#start-over').hidden = !saved;
+  $('#start-over').disabled = $('#cast').disabled;
   $('#browser').disabled = !online || !file;
   const canTranscode = Boolean(ui.state?.agent?.transcoding);
   $('#mode').disabled = !canTranscode;
@@ -290,7 +298,7 @@ function renderFiles() {
   const shown = ui.files.filter((f) => terms.every((t) => f.path.toLowerCase().includes(t)));
   const playing = ui.state?.session?.file;
   // Rebuilding a long list on every 1s state push is wasteful; only do it when something visible changed.
-  const key = `${ui.files.length}|${ui.filter}|${ui.selectedFile}|${playing}|${ui.filesRoot}`;
+  const key = `${ui.files.length}|${ui.filter}|${ui.selectedFile}|${playing}|${ui.filesRoot}|${JSON.stringify(ui.state?.folderProgress)}`;
   if (key === lastFilesKey) return;
   lastFilesKey = key;
 
@@ -299,7 +307,10 @@ function renderFiles() {
     const slash = f.path.lastIndexOf('/');
     const li = el('li', { className: [f.path === ui.selectedFile && 'sel', f.path === playing && 'playing'].filter(Boolean).join(' '), title: f.path },
       el('span', { textContent: f.kind === 'audio' ? '♪' : '▶' }),
-      el('div', {}, el('div', { className: 'name', textContent: f.name }), slash > 0 ? el('div', { className: 'dir', textContent: f.path.slice(0, slash) }) : null),
+      el('div', {},
+        el('div', { className: 'name', textContent: f.name }),
+        slash > 0 ? el('div', { className: 'dir', textContent: f.path.slice(0, slash) }) : null,
+        savedProgress(f.path) ? progressBar(savedProgress(f.path).position, savedProgress(f.path).duration) : null),
       el('div', { className: 'meta' }, f.subtitles ? el('span', { className: 'tag', textContent: 'SRT', title: 'Subtitles found' }) : null, ` ${fmtSize(f.size)}`));
     li.onclick = () => { ui.selectedFile = f.path; render(); };
     li.ondblclick = () => { ui.selectedFile = f.path; castSelected(); };
@@ -323,15 +334,70 @@ function toast(text, kind = 'info') {
 
 // --- actions --------------------------------------------------------------------
 
-async function castSelected() {
+/** Cast the selected file; resumes from its saved position unless fromStart. */
+async function castSelected({ fromStart = false } = {}) {
   const deviceId = currentDeviceId();
   if (!ui.selectedFile || !deviceId) return;
-  $('#cast').disabled = true;
-  $('#cast').textContent = 'Casting…';
-  const res = await run('play', { file: ui.selectedFile, deviceId, mode: $('#mode').value });
-  $('#cast').textContent = 'Cast to monitor';
+  const startAt = fromStart ? 0 : savedProgress(ui.selectedFile)?.position ?? 0;
+  ui.casting = true;
+  render();
+  const res = await run('play', { file: ui.selectedFile, deviceId, mode: $('#mode').value, startAt });
+  ui.casting = false;
   render();
   if (res?.warning) toast(res.warning, 'warn');
+}
+
+async function continueWatching(item) {
+  const deviceId = currentDeviceId();
+  if (!deviceId) return toast('Pick a device first.', 'warn');
+  ui.casting = true;
+  render();
+  const res = await run('continue', { id: item.id, deviceId, mode: $('#mode').value });
+  ui.casting = false;
+  if (res) {
+    ui.files = res.files;
+    ui.filesRoot = res.root;
+    ui.selectedFile = res.file;
+  }
+  render();
+  if (res?.warning) toast(res.warning, 'warn');
+}
+
+function savedProgress(relPath) {
+  return ui.state?.folderProgress?.[relPath] ?? null;
+}
+
+function progressBar(position, duration) {
+  const pct = duration ? Math.min(100, Math.max(2, (position / duration) * 100)) : 0;
+  const bar = el('div', { className: 'progress' }, el('i'));
+  bar.firstChild.style.width = `${pct}%`;
+  return bar;
+}
+
+let lastContinueKey = '';
+function renderContinue(online) {
+  const items = online ? ui.state?.continueWatching ?? [] : [];
+  $('#continue').hidden = items.length === 0;
+  const key = JSON.stringify(items) + ui.casting;
+  if (key === lastContinueKey) return;
+  lastContinueKey = key;
+  $('#continue-list').replaceChildren(
+    ...items.map((item) => {
+      const forget = el('button', { className: 'forget', textContent: '×', title: 'Remove from Continue watching' });
+      forget.setAttribute('aria-label', `Remove ${item.name} from Continue watching`);
+      forget.onclick = (e) => {
+        e.stopPropagation();
+        run('forget', { id: item.id });
+      };
+      const li = el('li', { title: item.id },
+        forget,
+        el('div', { className: 'title', textContent: item.name }),
+        el('div', { className: 'sub', textContent: `${item.folder} · ${fmtTime(item.position)} of ${fmtTime(item.duration)}` }),
+        progressBar(item.position, item.duration));
+      li.onclick = () => !ui.casting && continueWatching(item);
+      return li;
+    }),
+  );
 }
 
 async function openInBrowser() {
@@ -371,7 +437,14 @@ async function withPicker(button, fn) {
 }
 
 function bind() {
-  $('#cast').onclick = castSelected;
+  $('#cast').onclick = () => castSelected();
+  $('#start-over').onclick = () => castSelected({ fromStart: true });
+  $('#error-close').onclick = () => {
+    const err = ui.state?.error;
+    if (err) ui.dismissedError = `${err.code}|${err.message}`;
+    render();
+    run('dismissError');
+  };
   $('#mode').value = storage.get('castMode') ?? 'auto';
   $('#mode').onchange = () => storage.set('castMode', $('#mode').value);
   $('#browser').onclick = openInBrowser;

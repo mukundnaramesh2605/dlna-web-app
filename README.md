@@ -117,6 +117,10 @@ It plays in a plain HTML5 player served by the agent.
 | Unsupported codec or container | In Auto mode it's converted with ffmpeg automatically, and the status line says why ("transcoding (dts audio)"). Without ffmpeg, UPnP error 714/704 is explained and a warning appears before casting when the monitor doesn't list the format. |
 | Relay unreachable | Red **Relay offline** pill; the UI reconnects every 2s |
 
+Every error banner has a **×** to dismiss it. Errors are raised once, when
+the problem starts, so a dismissed error doesn't come back unless something
+new goes wrong.
+
 ## Stretch features (optional; the core works without them)
 
 - **Any video format (ffmpeg).** About 60 video and audio extensions are
@@ -143,6 +147,14 @@ It plays in a plain HTML5 player served by the agent.
   `sec:CaptionInfoEx`) and to the browser player (converted to WebVTT).
 - **Remembered settings.** The last folder (changed with **Change folder**)
   and the last selected device are saved in `~/.config/dlna-agent/state.json`.
+- **Continue watching.** While something plays, the agent saves its position
+  every 10 seconds, and again on pause or stop, including stopping from the
+  monitor's remote. The UI shows a **Continue watching** row of the 12 most
+  recent unfinished videos from any folder; click one to resume. Files with
+  a saved position get a progress bar in the list, and the Cast button
+  becomes **Resume at mm:ss**, with **Start over** next to it. A video counts
+  as finished in its last 90 seconds (or last 5%) and drops off the row. The
+  × on a card removes it.
 
 ## Security notes
 
