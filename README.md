@@ -147,6 +147,15 @@ new goes wrong.
   `sec:CaptionInfoEx`) and to the browser player (converted to WebVTT).
 - **Remembered settings.** The last folder (changed with **Change folder**)
   and the last selected device are saved in `~/.config/dlna-agent/state.json`.
+- **Audio track choice.** When the selected file has more than one audio
+  track, an **Audio** picker appears in the Cast card, showing each track's
+  language, title, codec and channels. DLNA has no standard way to switch
+  tracks, and the monitor always plays the file's default one. So any other
+  track is streamed through ffmpeg with only that track mapped in; the video
+  is passed through unchanged when possible, so this is cheap. Changing the
+  track while that file plays switches it at the current position. Seeking
+  keeps the track, the browser player honours it, and Continue watching
+  resumes with the track you last used.
 - **Continue watching.** While something plays, the agent saves its position
   every 10 seconds, and again on pause or stop, including stopping from the
   monitor's remote. The UI shows a **Continue watching** row of the 12 most

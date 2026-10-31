@@ -198,7 +198,8 @@ export function createMediaServer({ getRoot, baseUrl, transcoder }) {
         if (!full || !kindOf(full) || !fs.existsSync(full)) return notFound(res);
         events.emit('fetch', { path: rel, remote: req.socket.remoteAddress });
         const format = url.searchParams.get('format') === 'mp4' ? 'mp4' : 'ts';
-        return transcoder.stream(full, Number(url.searchParams.get('t') || 0), req, res, format);
+        const a = url.searchParams.get('a');
+        return transcoder.stream(full, Number(url.searchParams.get('t') || 0), req, res, format, a === null ? null : Number(a));
       }
       if (url.pathname === '/player') {
         const rel = url.searchParams.get('f') ?? '';
@@ -208,12 +209,14 @@ export function createMediaServer({ getRoot, baseUrl, transcoder }) {
         const subRel = sub && path.relative(root, sub).split(path.sep).join('/');
         // Containers browsers can't open (AVI, MKV, WMV, ...) get an ffmpeg
         // fragmented-MP4 stream instead (not seekable, but it plays).
-        const native = BROWSER_NATIVE.has(path.extname(full).toLowerCase());
+        // A chosen audio track (?a=N) also needs ffmpeg: browsers play only the default track.
+        const a = url.searchParams.get('a');
+        const native = BROWSER_NATIVE.has(path.extname(full).toLowerCase()) && a === null;
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(
           playerPage({
             title: path.basename(full),
-            src: native || !transcoder ? `/media/${encodePath(rel)}` : `/transcode/${encodePath(rel)}?format=mp4`,
+            src: native || !transcoder ? `/media/${encodePath(rel)}` : `/transcode/${encodePath(rel)}?format=mp4${a === null ? '' : `&a=${Number(a)}`}`,
             subtitles: subRel ? `/subs/${encodePath(subRel)}.vtt` : null,
           }),
         );

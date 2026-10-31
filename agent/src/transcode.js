@@ -30,13 +30,28 @@ export async function createTranscoder() {
     const info = JSON.parse(stdout);
     // Album art in audio files shows up as a one-frame "video" stream: ignore it.
     const first = (type) => info.streams.find((s) => s.codec_type === type && !s.disposition?.attached_pic)?.codec_name ?? null;
-    const result = { duration: Number(info.format?.duration) || 0, video: first('video'), audio: first('audio') };
+    // n is the index among audio streams, i.e. what ffmpeg's -map 0:a:<n> means.
+    const audioTracks = info.streams
+      .filter((s) => s.codec_type === 'audio')
+      .map((s, n) => ({
+        n,
+        codec: s.codec_name,
+        language: s.tags?.language && s.tags.language !== 'und' ? s.tags.language : null,
+        title: s.tags?.title ?? null,
+        channels: s.channels ?? null,
+        default: Boolean(s.disposition?.default),
+      }));
+    const defaultTrack = Math.max(0, audioTracks.findIndex((t) => t.default));
+    const result = { duration: Number(info.format?.duration) || 0, video: first('video'), audio: first('audio'), audioTracks, defaultTrack };
     probes.set(file, result);
     return result;
   }
 
-  /** format: 'ts' (for DLNA renderers, default) or 'mp4' (fragmented MP4 for web browsers). */
-  async function stream(file, startSeconds, req, res, format = 'ts') {
+  /**
+   * format: 'ts' (for DLNA renderers, default) or 'mp4' (fragmented MP4 for web browsers).
+   * audioTrack: which audio stream to include (index among audio streams); default track if omitted.
+   */
+  async function stream(file, startSeconds, req, res, format = 'ts', audioTrack = null) {
     let info;
     try {
       info = await probe(file);
@@ -62,21 +77,23 @@ export async function createTranscoder() {
 
     // +genpts rebuilds missing timestamps (common in old AVI/VOB files).
     const args = ['-hide_banner', '-loglevel', 'error', '-fflags', '+genpts', '-ss', String(Math.max(0, startSeconds)), '-i', file];
+    const track = info.audioTracks[audioTrack ?? info.defaultTrack] ?? info.audioTracks[0];
+    const audioCodec = track?.codec ?? null;
     if (audioOnly) {
-      args.push('-vn', '-c:a', 'libmp3lame', '-b:a', '320k', '-f', 'mp3', 'pipe:1');
+      args.push('-vn', ...(track ? ['-map', `0:a:${track.n}`] : []), '-c:a', 'libmp3lame', '-b:a', '320k', '-f', 'mp3', 'pipe:1');
     } else {
       // Copy streams that are already Samsung-friendly; only re-encode what isn't.
       // E.g. HEVC + DTS in MKV keeps the HEVC and only converts DTS to AAC.
       // Browsers reliably decode only H.264 + AAC, so the mp4 flavour is stricter.
       const copyVideo = forBrowser ? info.video === 'h264' : TS_COPY_VIDEO.has(info.video);
-      const copyAudio = forBrowser ? info.audio === 'aac' : TS_COPY_AUDIO.has(info.audio);
-      args.push('-map', '0:v:0', '-map', '0:a:0?', '-sn');
+      const copyAudio = forBrowser ? audioCodec === 'aac' : TS_COPY_AUDIO.has(audioCodec);
+      args.push('-map', '0:v:0', ...(track ? ['-map', `0:a:${track.n}`] : []), '-sn');
       args.push(...(copyVideo ? ['-c:v', 'copy'] : videoEncoder));
       args.push(...(copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k', '-ac', '2']));
       if (forBrowser) args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
       else args.push('-f', 'mpegts', 'pipe:1');
     }
-    console.log(`[transcode] ${file} from ${startSeconds}s (video ${info.video ?? '-'}, audio ${info.audio ?? '-'})`);
+    console.log(`[transcode] ${file} from ${startSeconds}s (video ${info.video ?? '-'}, audio track ${track ? track.n + 1 : '-'} ${audioCodec ?? ''})`);
     const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     ff.stderr.on('data', (d) => console.error('[ffmpeg]', d.toString().trim()));
     ff.stdout.pipe(res);

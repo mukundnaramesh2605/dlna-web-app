@@ -82,4 +82,4 @@ Samsung firmware wants specific DLNA headers and flags.
 `getState`, `listFiles`, `setFolder {path}`, `rescan`, `selectDevice {deviceId}`,
 `play {file, deviceId, mode: auto|transcode|direct}`, `pause`, `resume`, `stop`, `seek {seconds}`,
 `volume {level}`, `browserLink {file}`, `play {…, startAt}`, `continue {id, deviceId, mode}`,
-`forget {id}`, `dismissError`, `pickFolder`, `pickFile`.
+`forget {id}`, `dismissError`, `pickFolder`, `pickFile`, `tracks {file}`; `play`, `continue` and `browserLink` accept `audioTrack`.

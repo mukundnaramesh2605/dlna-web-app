@@ -13,7 +13,7 @@ import { chooseInFinder } from './finder.js';
 
 import { transcodeReason } from './compat.js';
 
-export function createController({ config, store, transcoder }) {
+export function createController({ config, store, transcoder, discover = discoverRenderers }) {
   const baseUrl = `http://${config.host}:${config.port}`;
   let mediaDir = validDir(store.get('mediaDir')) ? store.get('mediaDir') : config.mediaDir;
   const devices = new Map();
@@ -30,7 +30,7 @@ export function createController({ config, store, transcoder }) {
   const lastFetch = new Map(); // relative path -> time the media server last served it
 
   const mediaUrl = (rel) => `${baseUrl}/media/${encodePath(rel)}`;
-  const transcodeUrl = (rel, t) => `${baseUrl}/transcode/${encodePath(rel)}?t=${Math.floor(t)}`;
+  const transcodeUrl = (rel, t, audioTrack = 0) => `${baseUrl}/transcode/${encodePath(rel)}?t=${Math.floor(t)}&a=${audioTrack}`;
 
   function state() {
     return {
@@ -55,6 +55,7 @@ export function createController({ config, store, transcoder }) {
         mode: session.mode,
         transcode: session.transcode,
         transcodeReason: session.reason,
+        audioTrack: session.audioTrack,
         warning: session.warning,
       },
       ...live,
@@ -78,7 +79,7 @@ export function createController({ config, store, transcoder }) {
       if (!(s.full in all)) return;
       delete all[s.full];
     } else {
-      all[s.full] = { name: s.name, position: Math.floor(position), duration: Math.floor(duration), updatedAt: Date.now() };
+      all[s.full] = { name: s.name, position: Math.floor(position), duration: Math.floor(duration), audioTrack: s.audioTrack, updatedAt: Date.now() };
       const keys = Object.keys(all).sort((a, b) => all[b].updatedAt - all[a].updatedAt);
       for (const k of keys.slice(200)) delete all[k];
     }
@@ -98,7 +99,7 @@ export function createController({ config, store, transcoder }) {
     const out = {};
     for (const [id, p] of Object.entries(progressAll())) {
       const rel = path.relative(mediaDir, id);
-      if (resolveInside(mediaDir, rel)) out[rel.split(path.sep).join('/')] = { position: p.position, duration: p.duration };
+      if (resolveInside(mediaDir, rel)) out[rel.split(path.sep).join('/')] = { position: p.position, duration: p.duration, audioTrack: p.audioTrack ?? null };
     }
     return out;
   }
@@ -112,7 +113,7 @@ export function createController({ config, store, transcoder }) {
     }
     if (!resolveInside(mediaDir, path.relative(mediaDir, id))) await setFolder({ path: path.dirname(id) });
     const file = path.relative(mediaDir, id).split(path.sep).join('/');
-    const result = await play({ file, deviceId, mode, startAt: entry.position });
+    const result = await play({ file, deviceId, mode, startAt: entry.position, audioTrack: entry.audioTrack ?? null });
     return { ...result, root: mediaDir, files: await listMedia(mediaDir), file };
   }
 
@@ -140,7 +141,7 @@ export function createController({ config, store, transcoder }) {
     scanning = true;
     changed();
     try {
-      const found = await discoverRenderers(config.host);
+      const found = await discover(config.host);
       devices.clear();
       for (const d of found) devices.set(d.id, d);
       // Keep the device we're casting to, even if it missed this scan.
@@ -168,7 +169,7 @@ export function createController({ config, store, transcoder }) {
    * and an ffmpeg conversion when it can't; 'transcode' always converts;
    * 'direct' never does. `transcode: true` is the older spelling of mode 'transcode'.
    */
-  async function play({ file, deviceId, mode, transcode, startAt = 0 }) {
+  async function play({ file, deviceId, mode, transcode, startAt = 0, audioTrack = null }) {
     mode = mode ?? (transcode ? 'transcode' : 'auto');
     startAt = Math.max(0, Number(startAt) || 0);
     const full = requireFile(file);
@@ -181,23 +182,34 @@ export function createController({ config, store, transcoder }) {
     // and, with ffprobe's codec info, to decide whether the file plays as-is.
     const sink = await renderer.sinkMimeTypes().catch(() => null);
     const picked = pickMime(mimeOf(full), sink);
+    const info = transcoder ? await transcoder.probe(full).catch(() => null) : null;
+
+    // Audio track: the monitor always plays the file's default track, so any
+    // other choice means streaming through ffmpeg with that track mapped in.
+    const tracks = info?.audioTracks ?? [];
+    const defaultTrack = info?.defaultTrack ?? 0;
+    const track = Number.isInteger(audioTrack) && tracks[audioTrack] ? audioTrack : defaultTrack;
 
     const ext = path.extname(full).toLowerCase();
     let reason = null; // why we're transcoding; null = stream the original
+    let warning = null;
     if (mode === 'transcode') reason = 'Transcode set to Always';
     else if (mode === 'auto' && transcoder && learnedFailures(device.id).includes(ext)) {
       reason = `${ext} files didn't play directly on this monitor before`;
     } else if (mode === 'auto' && transcoder) {
-      const info = await transcoder.probe(full).catch(() => null);
-      reason = info ? transcodeReason(info, picked.supported) : picked.supported ? null : 'container not supported by the monitor';
+      reason = info
+        ? transcodeReason({ ...info, audio: tracks[track]?.codec ?? info.audio }, picked.supported)
+        : picked.supported ? null : 'container not supported by the monitor';
+      if (!reason && track !== defaultTrack) reason = `audio track ${track + 1}`;
+    } else if (mode === 'direct' && track !== defaultTrack) {
+      warning = 'Transcode is set to Never, so the monitor plays the default audio track.';
     }
-    let warning = null;
     if (!reason && !picked.supported) {
       warning = `The monitor doesn't list ${picked.mime} as supported; playback may fail.`;
       warning += transcoder ? ' Set Transcode to Always if it does.' : ' Install ffmpeg (brew install ffmpeg) so the agent can convert it.';
     }
 
-    const params = { file, full, device, renderer, sink, mime: picked.mime, mode, warning, startAt };
+    const params = { file, full, device, renderer, sink, mime: picked.mime, mode, warning, startAt, audioTrack: track };
     try {
       await startCast({ ...params, reason });
     } catch (err) {
@@ -211,7 +223,7 @@ export function createController({ config, store, transcoder }) {
   }
 
   /** Load a file on the renderer (original or transcoded) and start a new session. */
-  async function startCast({ file, full, device, renderer, sink, mime, mode, reason, warning, startAt = 0 }) {
+  async function startCast({ file, full, device, renderer, sink, mime, mode, reason, warning, startAt = 0, audioTrack = 0 }) {
     const transcode = Boolean(reason);
     const kind = kindOf(full);
     let duration = 0;
@@ -223,7 +235,7 @@ export function createController({ config, store, transcoder }) {
 
     // Resuming: a transcoded stream simply starts at startAt; the original
     // file is seeked once the monitor reports PLAYING (see poll()).
-    const url = transcode ? transcodeUrl(file, startAt) : mediaUrl(file);
+    const url = transcode ? transcodeUrl(file, startAt, audioTrack) : mediaUrl(file);
     const sub = kind === 'video' ? findSubtitle(full) : null;
     const subtitleUrl = sub ? mediaUrl(path.relative(mediaDir, sub).split(path.sep).join('/')) : null;
     const didl = buildDidl({
@@ -245,6 +257,7 @@ export function createController({ config, store, transcoder }) {
       file, full, name: path.basename(full), kind, mime, sink, device, renderer, url, mode,
       transcode, reason, offset: transcode ? startAt : 0, duration, startedAt, warning, seenActive: false, retried: false,
       startAt, // requested start position, kept so a transcode fallback resumes at the same spot
+      audioTrack,
       resumeAt: transcode ? 0 : startAt, // pending seek for the original file
       resumeTries: 0,
       saveAfter: startedAt + (startAt ? 10_000 : 0), // don't record progress until a resume has settled
@@ -266,8 +279,9 @@ export function createController({ config, store, transcoder }) {
     const target = Math.max(0, Number(seconds) || 0);
     if (s.transcode) {
       // A transcoded stream can't byte-seek: restart ffmpeg at the new offset.
-      const didl = buildDidl({ title: s.name, url: transcodeUrl(s.file, target), mime: s.mime, kind: s.kind, duration: s.duration, seekable: false });
-      await s.renderer.cast(transcodeUrl(s.file, target), didl);
+      const url = transcodeUrl(s.file, target, s.audioTrack);
+      const didl = buildDidl({ title: s.name, url, mime: s.mime, kind: s.kind, duration: s.duration, seekable: false });
+      await s.renderer.cast(url, didl);
       s.offset = target;
       if (error?.code === 'RENDERER_ERROR') error = null; // fresh stream, fresh start
     } else {
@@ -277,9 +291,12 @@ export function createController({ config, store, transcoder }) {
     changed();
   }
 
-  async function browserLink({ file }) {
+  async function browserLink({ file, audioTrack = null }) {
     requireFile(file);
-    const playerUrl = `${baseUrl}/player?f=${encodeURIComponent(file)}`;
+    const full = resolveInside(mediaDir, file);
+    const info = transcoder ? await transcoder.probe(full).catch(() => null) : null;
+    const nonDefault = Number.isInteger(audioTrack) && info?.audioTracks[audioTrack] && audioTrack !== info.defaultTrack;
+    const playerUrl = `${baseUrl}/player?f=${encodeURIComponent(file)}${nonDefault ? `&a=${audioTrack}` : ''}`;
     return {
       playerUrl,
       mediaUrl: mediaUrl(file),
@@ -467,6 +484,12 @@ export function createController({ config, store, transcoder }) {
     },
     browserLink,
     continue: continueItem,
+    /** Audio tracks in a file, for the UI's track picker. */
+    tracks: async ({ file }) => {
+      const full = requireFile(file);
+      const info = transcoder ? await transcoder.probe(full).catch(() => null) : null;
+      return { tracks: info?.audioTracks ?? [], defaultTrack: info?.defaultTrack ?? 0, canSwitch: Boolean(transcoder) };
+    },
     forget,
     dismissError: () => {
       error = null;

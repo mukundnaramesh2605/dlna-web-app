@@ -21,6 +21,8 @@ const ui = {
   picking: false, // a Finder dialog is open on the Mac
   casting: false, // a play/continue command is in flight
   dismissedError: null, // "code|message" of the error the user closed
+  tracks: {}, // "<folder>/<file>" -> { tracks, defaultTrack, canSwitch } (null while loading)
+  audioChoice: {}, // "<folder>/<file>" -> chosen audio track index
 };
 
 // --- storage (may be unavailable in private windows) ----------------------
@@ -250,6 +252,90 @@ function renderCast(online) {
   $('#mode-wrap').title = canTranscode
     ? 'Auto: play the original when the monitor can decode it, otherwise convert it with ffmpeg on the Mac. Always: always convert. Never: always send the original.'
     : 'Install ffmpeg on the Mac (brew install ffmpeg) to enable transcoding';
+  renderAudio(online);
+}
+
+// --- audio tracks -------------------------------------------------------------
+// Track lists are fetched per file on selection and cached; the picker only
+// shows when a file has more than one audio track.
+
+const trackKey = (relPath) => `${ui.filesRoot}/${relPath}`;
+
+function selectFile(relPath) {
+  ui.selectedFile = relPath;
+  render();
+  loadTracks(relPath);
+}
+
+async function loadTracks(relPath) {
+  const key = trackKey(relPath);
+  if (!relPath || key in ui.tracks) return;
+  ui.tracks[key] = null; // in flight
+  const res = await cmd('tracks', { file: relPath }).catch(() => undefined);
+  if (res === undefined) return void delete ui.tracks[key];
+  ui.tracks[key] = res;
+  render();
+}
+
+/** The track to play: explicit choice, else the one playing/last used for this file, else the default. */
+function currentAudioTrack(relPath) {
+  const info = ui.tracks[trackKey(relPath)];
+  if (!info || info.tracks.length < 2) return null;
+  const key = trackKey(relPath);
+  if (key in ui.audioChoice) return ui.audioChoice[key];
+  const session = ui.state?.session;
+  if (session?.file === relPath && session.audioTrack != null) return session.audioTrack;
+  return savedProgress(relPath)?.audioTrack ?? info.defaultTrack;
+}
+
+const chosenAudioTrack = () => currentAudioTrack(ui.selectedFile);
+
+function trackLabel(t) {
+  const lang = t.language ? (LANGUAGE_NAMES[t.language] ?? t.language.toUpperCase()) : 'Unknown';
+  const ch = t.channels === 1 ? 'mono' : t.channels === 2 ? 'stereo' : t.channels ? `${t.channels - 1}.1` : '';
+  const details = [t.codec?.toUpperCase(), ch].filter(Boolean).join(' ');
+  return `${t.n + 1}. ${lang}${t.title && t.title !== lang ? ` – ${t.title}` : ''} (${details})${t.default ? ' · default' : ''}`;
+}
+
+const LANGUAGE_NAMES = {
+  eng: 'English', en: 'English', tam: 'Tamil', ta: 'Tamil', hin: 'Hindi', hi: 'Hindi', tel: 'Telugu', te: 'Telugu',
+  mal: 'Malayalam', ml: 'Malayalam', kan: 'Kannada', kn: 'Kannada', jpn: 'Japanese', ja: 'Japanese', spa: 'Spanish',
+  es: 'Spanish', fre: 'French', fra: 'French', fr: 'French', ger: 'German', deu: 'German', de: 'German', kor: 'Korean',
+  ko: 'Korean', chi: 'Chinese', zho: 'Chinese', zh: 'Chinese', ita: 'Italian', it: 'Italian', rus: 'Russian', ru: 'Russian',
+};
+
+let lastAudioKey = '';
+function renderAudio(online) {
+  const info = ui.selectedFile ? ui.tracks[trackKey(ui.selectedFile)] : null;
+  const show = Boolean(info && info.tracks.length > 1);
+  $('#audio-wrap').hidden = !show;
+  if (!show) return;
+  const select = $('#audio');
+  const key = `${trackKey(ui.selectedFile)}|${JSON.stringify(info.tracks)}`;
+  if (key !== lastAudioKey) {
+    lastAudioKey = key;
+    select.replaceChildren(...info.tracks.map((t) => el('option', { value: String(t.n), textContent: trackLabel(t) })));
+  }
+  if (document.activeElement !== select) select.value = String(currentAudioTrack(ui.selectedFile));
+  select.disabled = !online || ui.casting || !info.canSwitch;
+  $('#audio-wrap').title = info.canSwitch
+    ? 'Other tracks than the default are streamed through ffmpeg on the Mac (video is passed through where possible).'
+    : 'Install ffmpeg on the Mac (brew install ffmpeg) to switch audio tracks';
+}
+
+/** Picking a track while that file is playing switches it in place, at the current position. */
+async function onAudioChange() {
+  const n = Number($('#audio').value);
+  ui.audioChoice[trackKey(ui.selectedFile)] = n;
+  const session = ui.state?.session;
+  if (session?.file !== ui.selectedFile) return;
+  toast('Switching audio track…');
+  ui.casting = true;
+  render();
+  const res = await run('play', { file: session.file, deviceId: session.deviceId, mode: $('#mode').value, startAt: ui.state.position, audioTrack: n });
+  ui.casting = false;
+  render();
+  if (res?.warning) toast(res.warning, 'warn');
 }
 
 function renderNowPlaying(online) {
@@ -312,8 +398,8 @@ function renderFiles() {
         slash > 0 ? el('div', { className: 'dir', textContent: f.path.slice(0, slash) }) : null,
         savedProgress(f.path) ? progressBar(savedProgress(f.path).position, savedProgress(f.path).duration) : null),
       el('div', { className: 'meta' }, f.subtitles ? el('span', { className: 'tag', textContent: 'SRT', title: 'Subtitles found' }) : null, ` ${fmtSize(f.size)}`));
-    li.onclick = () => { ui.selectedFile = f.path; render(); };
-    li.ondblclick = () => { ui.selectedFile = f.path; castSelected(); };
+    li.onclick = () => selectFile(f.path);
+    li.ondblclick = () => { selectFile(f.path); castSelected(); };
     frag.append(li);
   }
   $('#file-list').replaceChildren(frag);
@@ -341,7 +427,7 @@ async function castSelected({ fromStart = false } = {}) {
   const startAt = fromStart ? 0 : savedProgress(ui.selectedFile)?.position ?? 0;
   ui.casting = true;
   render();
-  const res = await run('play', { file: ui.selectedFile, deviceId, mode: $('#mode').value, startAt });
+  const res = await run('play', { file: ui.selectedFile, deviceId, mode: $('#mode').value, startAt, audioTrack: chosenAudioTrack() });
   ui.casting = false;
   render();
   if (res?.warning) toast(res.warning, 'warn');
@@ -357,7 +443,7 @@ async function continueWatching(item) {
   if (res) {
     ui.files = res.files;
     ui.filesRoot = res.root;
-    ui.selectedFile = res.file;
+    selectFile(res.file);
   }
   render();
   if (res?.warning) toast(res.warning, 'warn');
@@ -402,7 +488,7 @@ function renderContinue(online) {
 
 async function openInBrowser() {
   if (!ui.selectedFile) return;
-  const res = await run('browserLink', { file: ui.selectedFile });
+  const res = await run('browserLink', { file: ui.selectedFile, audioTrack: chosenAudioTrack() });
   if (!res) return;
   // Shown as an <img> so the agent-generated SVG can't run anything.
   $('#qr').src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(res.qrSvg)}`;
@@ -439,6 +525,7 @@ async function withPicker(button, fn) {
 function bind() {
   $('#cast').onclick = () => castSelected();
   $('#start-over').onclick = () => castSelected({ fromStart: true });
+  $('#audio').onchange = onAudioChange;
   $('#error-close').onclick = () => {
     const err = ui.state?.error;
     if (err) ui.dismissedError = `${err.code}|${err.message}`;
@@ -469,7 +556,7 @@ function bind() {
     const res = await run('pickFile');
     if (!res || res.cancelled) return;
     applyFolder(res);
-    ui.selectedFile = res.file;
+    selectFile(res.file);
     render();
     if (currentDeviceId()) await castSelected();
     else toast('File selected. Pick a device, then press Cast.');
